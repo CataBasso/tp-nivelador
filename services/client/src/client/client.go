@@ -74,6 +74,8 @@ func (client *Client) Run() error {
 	defer outputFile.Close()
 
 	scanner := bufio.NewScanner(inputFile)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
 	writer := bufio.NewWriter(outputFile)
 	defer writer.Flush()
 
@@ -87,14 +89,12 @@ func (client *Client) Run() error {
 			"message-id", messageId,
 		}
 
-		logger.Info("send-message", logger.InProgress, messageArgs...)
-
-		if err := safe_socket.SendAll(client.conn, []byte(clientMessage)); err != nil {
+		if err := safe_socket.SendMessage(client.conn, []byte(clientMessage)); err != nil {
 			logger.Error("send-message", logger.Fail, messageArgs...)
 			return err
 		}
 
-		responseBuffer, err := safe_socket.RecvAll(client.conn, 1024)
+		responseBuffer, err := safe_socket.RecvMessage(client.conn)
 		if err != nil {
 			logger.Error("recv-response", logger.Fail, messageArgs...)
 			return err
