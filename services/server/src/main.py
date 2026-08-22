@@ -3,14 +3,17 @@ import sys
 
 import logger
 import server
+from lottery import Lottery
 
 SERVER_HOST = os.environ["SERVER_HOST"]
 SERVER_PORT = int(os.environ["SERVER_PORT"])
+STORAGE_FILEPATH = os.environ.get("STORAGE_FILEPATH", "bets.csv")
 
 
 def main():
     logger.init()
-    s = server.Server(SERVER_HOST, SERVER_PORT)
+    lottery = Lottery(storage_path=STORAGE_FILEPATH)
+    s = server.Server(SERVER_HOST, SERVER_PORT, lottery)
     try:
         s.run()
     except Exception as e:
