@@ -15,9 +15,6 @@ import (
 	"github.com/7574-sistemas-distribuidos/tp-nivelador/src/safe_socket"
 )
 
-const CONNECTION_ATTEMPTS_MAX = 3
-const CONNECTION_ATTEMPS_DELAY_MS = 200
-
 const CONNECTION_RETRY_DELAY = 200 * time.Millisecond
 const CONNECTION_WAIT_TIMEOUT = 20 * time.Second
 const DIAL_TIMEOUT = 2 * time.Second
