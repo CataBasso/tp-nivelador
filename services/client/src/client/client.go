@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -18,6 +19,7 @@ import (
 const CONNECTION_RETRY_DELAY = 200 * time.Millisecond
 const CONNECTION_WAIT_TIMEOUT = 20 * time.Second
 const DIAL_TIMEOUT = 2 * time.Second
+const SHUTDOWN_FORCE_CLOSE_DELAY = 3 * time.Second
 
 type ClientConfig struct {
 	ServerHost string
@@ -33,8 +35,8 @@ type Client struct {
 	config ClientConfig
 }
 
-func NewClient(config ClientConfig) (*Client, error) {
-	conn, err := connectToServer(config.ServerHost, config.ServerPort)
+func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
+	conn, err := connectToServer(ctx, config.ServerHost, config.ServerPort)
 	if err != nil {
 		logger.Warn("connect-to-server", logger.Fail)
 		return nil, err
@@ -44,7 +46,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 	return client, nil
 }
 
-func connectToServer(host, port string) (net.Conn, error) {
+func connectToServer(ctx context.Context, host, port string) (net.Conn, error) {
 	const action = "connect-to-server"
 
 	deadline := time.Now().Add(CONNECTION_WAIT_TIMEOUT)
@@ -55,6 +57,10 @@ func connectToServer(host, port string) (net.Conn, error) {
 	logger.Info(action, logger.InProgress)
 
 	for {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("connection aborted: %w", ctx.Err())
+		}
+
 		conn, err := net.DialTimeout("tcp", address, DIAL_TIMEOUT)
 		if err == nil {
 			logger.Info(action, logger.Success, "attempt", attempt)
@@ -69,7 +75,11 @@ func connectToServer(host, port string) (net.Conn, error) {
 			return nil, fmt.Errorf("could not connect to %s after %d attempts: %w", address, attempt, lastErr)
 		}
 
-		time.Sleep(CONNECTION_RETRY_DELAY)
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("connection aborted: %w", ctx.Err())
+		case <-time.After(CONNECTION_RETRY_DELAY):
+		}
 	}
 }
 
@@ -100,7 +110,6 @@ func parseBetLine(line string, agencyId int) (bet.Bet, error) {
 	}, nil
 }
 
-
 func (client *Client) sendBatch(batch []bet.Bet, batchArgs []any) error {
 	if err := safe_socket.SendMessage(client.conn, protocol.EncodeBets(batch)); err != nil {
 		logger.Error("send-batch", logger.Fail, batchArgs...)
@@ -130,7 +139,7 @@ func (client *Client) sendBatch(batch []bet.Bet, batchArgs []any) error {
 	}
 }
 
-func (client *Client) Run() error {
+func (client *Client) Run(ctx context.Context) error {
 	defer client.conn.Close()
 
 	agencyId, err := strconv.Atoi(client.config.AgencyId)
@@ -160,9 +169,26 @@ func (client *Client) Run() error {
 	writer := bufio.NewWriter(outputFile)
 	defer writer.Flush()
 
+	shutdownDone := make(chan struct{})
+	defer close(shutdownDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			logger.Info("shutdown", logger.InProgress)
+			select {
+			case <-shutdownDone:
+			case <-time.After(SHUTDOWN_FORCE_CLOSE_DELAY):
+				logger.Error("shutdown", logger.Fail, "reason", "force-close")
+				client.conn.Close()
+			}
+		case <-shutdownDone:
+		}
+	}()
+
 	betsAmount := 0
 	batchesAmount := 0
 	batch := make([]bet.Bet, 0, client.config.BatchSize)
+	shuttingDown := false
 
 	flushBatch := func() error {
 		if len(batch) == 0 {
@@ -182,7 +208,15 @@ func (client *Client) Run() error {
 		return nil
 	}
 
+scanLoop:
 	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			shuttingDown = true
+			break scanLoop
+		default:
+		}
+
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
@@ -204,6 +238,17 @@ func (client *Client) Run() error {
 
 	if err := scanner.Err(); err != nil {
 		return err
+	}
+
+	if shuttingDown {
+		logger.Info(
+			"send-bets", logger.Success,
+			"agency-id", client.config.AgencyId,
+			"bets-amount", betsAmount,
+			"batches-amount", batchesAmount,
+			"reason", "shutdown",
+		)
+		return nil
 	}
 
 	if err := flushBatch(); err != nil {
@@ -234,8 +279,7 @@ func (client *Client) Run() error {
 	}
 
 	logger.Info(
-		"send-bets",
-		logger.Success,
+		"send-bets", logger.Success,
 		"agency-id", client.config.AgencyId,
 		"bets-amount", betsAmount,
 		"batches-amount", batchesAmount,
