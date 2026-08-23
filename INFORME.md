@@ -26,6 +26,7 @@ Se definieron **tipos de mensaje explícitos**, identificados por un byte al ini
 - `2` (DONE): El **cliente** indica que la agencia terminó de enviar apuestas y le solicita el resultado del sorteo al **servidor**. 
 - `3` (ACK): El **servidor** le confirma que una apuesta fue almacenada al **cliente**.
 - `4` (WINNERS): El **servidor** devuelve el listado de ganadores de la agencia al **cliente** (uno o más registros separados por salto de línea, cada uno `first_name,last_name,document,birthdate,number`).
+- `5` (BATCH_ERROR): El **servidor** le envia al **cliente** un mensaje de error en texto plano. 
 
 ## Flujo de la comunicación
 

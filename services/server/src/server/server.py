@@ -1,4 +1,5 @@
 import socket
+
 import logger
 import safe_socket
 import protocol
@@ -34,19 +35,11 @@ class Server:
             msg_type = protocol.decode_message_type(message)
 
             if msg_type == protocol.MSG_BET:
-                fields = protocol.decode_bet(message)
-                agency_id = fields.agency_id
-                bet = Bet(
-                    fields.agency_id,
-                    fields.first_name,
-                    fields.last_name,
-                    fields.document,
-                    fields.birthdate,
-                    fields.number,
+                batch_agency_id, batch_count = self._handle_bet_batch(
+                    client_socket, message
                 )
-                self.lottery.store_bets([bet])
-                bets_amount += 1
-                safe_socket.send_message(client_socket, protocol.encode_ack())
+                agency_id = batch_agency_id
+                bets_amount += batch_count
 
             elif msg_type == protocol.MSG_DONE:
                 logger.info(
@@ -63,6 +56,30 @@ class Server:
 
             else:
                 raise ValueError(f"unexpected message type: {msg_type}")
+
+    def _handle_bet_batch(self, client_socket, raw_message):
+        """Decodifica y persiste un batch. Devuelve (agency_id, cantidad)
+        del batch procesado; no toca estado de instancia, así que cada
+        conexión mantiene su propio conteo en _handle_client."""
+        try:
+            fields_list = protocol.decode_bets(raw_message)
+            bets = [
+                Bet(
+                    f.agency_id, f.first_name, f.last_name,
+                    f.document, f.birthdate, f.number,
+                )
+                for f in fields_list
+            ]
+            self.lottery.store_bets(bets)
+        except Exception as e:
+            logger.error("handle-batch", logger.LogResult.fail, "err", str(e))
+            safe_socket.send_message(
+                client_socket, protocol.encode_batch_error(str(e))
+            )
+            raise
+
+        safe_socket.send_message(client_socket, protocol.encode_ack())
+        return bets[0].agency_id, len(bets)
 
     def _winners_for_agency(self, agency_id) -> list:
         return [

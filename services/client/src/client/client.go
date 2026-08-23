@@ -25,6 +25,7 @@ type ClientConfig struct {
 	AgencyId   string
 	InputFile  string
 	OutputFile string
+	BatchSize  int
 }
 
 type Client struct {
@@ -44,31 +45,31 @@ func NewClient(config ClientConfig) (*Client, error) {
 }
 
 func connectToServer(host, port string) (net.Conn, error) {
-    const action = "connect-to-server"
+	const action = "connect-to-server"
 
-    deadline := time.Now().Add(CONNECTION_WAIT_TIMEOUT)
-    address := net.JoinHostPort(host, port)
-    attempt := 0
-    var lastErr error
+	deadline := time.Now().Add(CONNECTION_WAIT_TIMEOUT)
+	address := net.JoinHostPort(host, port)
+	attempt := 0
+	var lastErr error
 
-    logger.Info(action, logger.InProgress)
+	logger.Info(action, logger.InProgress)
 
-    for {
-        conn, err := net.DialTimeout("tcp", address, DIAL_TIMEOUT)
-        if err == nil {
-            logger.Info(action, logger.Success, "attempt", attempt)
-            return conn, nil
-        }
+	for {
+		conn, err := net.DialTimeout("tcp", address, DIAL_TIMEOUT)
+		if err == nil {
+			logger.Info(action, logger.Success, "attempt", attempt)
+			return conn, nil
+		}
 
-        lastErr = err
-        logger.Warn(action, logger.Fail, "attempt", attempt, "err", err)
-        attempt++
+		lastErr = err
+		logger.Warn(action, logger.Fail, "attempt", attempt, "err", err)
+		attempt++
 
-        if time.Now().After(deadline) {
-            return nil, fmt.Errorf("could not connect to %s after %d attempts: %w", address, attempt, lastErr)
-        }
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("could not connect to %s after %d attempts: %w", address, attempt, lastErr)
+		}
 
-        time.Sleep(CONNECTION_RETRY_DELAY)
+		time.Sleep(CONNECTION_RETRY_DELAY)
 	}
 }
 
@@ -99,12 +100,46 @@ func parseBetLine(line string, agencyId int) (bet.Bet, error) {
 	}, nil
 }
 
+
+func (client *Client) sendBatch(batch []bet.Bet, batchArgs []any) error {
+	if err := safe_socket.SendMessage(client.conn, protocol.EncodeBets(batch)); err != nil {
+		logger.Error("send-batch", logger.Fail, batchArgs...)
+		return err
+	}
+
+	responseRaw, err := safe_socket.RecvMessage(client.conn)
+	if err != nil {
+		logger.Error("recv-batch-response", logger.Fail, batchArgs...)
+		return err
+	}
+
+	responseType, err := protocol.DecodeMessageType(responseRaw)
+	if err != nil {
+		return err
+	}
+
+	switch responseType {
+	case protocol.MsgAck:
+		return nil
+	case protocol.MsgBatchError:
+		errMsg, _ := protocol.DecodeBatchError(responseRaw)
+		logger.Error("recv-batch-response", logger.Fail, append(batchArgs, "server-err", errMsg)...)
+		return fmt.Errorf("server rejected batch: %s", errMsg)
+	default:
+		return fmt.Errorf("unexpected response type to batch: %d", responseType)
+	}
+}
+
 func (client *Client) Run() error {
 	defer client.conn.Close()
 
 	agencyId, err := strconv.Atoi(client.config.AgencyId)
 	if err != nil {
 		return fmt.Errorf("invalid AGENCY_ID %q: %w", client.config.AgencyId, err)
+	}
+
+	if client.config.BatchSize <= 0 {
+		return fmt.Errorf("invalid BATCH_SIZE %d: must be greater than 0", client.config.BatchSize)
 	}
 
 	inputFile, err := os.Open(client.config.InputFile)
@@ -126,41 +161,52 @@ func (client *Client) Run() error {
 	defer writer.Flush()
 
 	betsAmount := 0
+	batchesAmount := 0
+	batch := make([]bet.Bet, 0, client.config.BatchSize)
+
+	flushBatch := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		batchArgs := []any{
+			"agency-id", client.config.AgencyId,
+			"batch-id", batchesAmount,
+			"batch-size", len(batch),
+		}
+		if err := client.sendBatch(batch, batchArgs); err != nil {
+			return err
+		}
+		betsAmount += len(batch)
+		batchesAmount++
+		batch = batch[:0]
+		return nil
+	}
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-		betArgs := []any{"agency-id", client.config.AgencyId, "bet-id", betsAmount}
 
 		parsedBet, err := parseBetLine(line, agencyId)
 		if err != nil {
-			logger.Error("parse-bet", logger.Fail, betArgs...)
+			logger.Error("parse-bet", logger.Fail, "agency-id", client.config.AgencyId, "bet-id", betsAmount+len(batch))
 			return err
 		}
 
-		if err := safe_socket.SendMessage(client.conn, protocol.EncodeBet(parsedBet)); err != nil {
-			logger.Error("send-bet", logger.Fail, betArgs...)
-			return err
+		batch = append(batch, parsedBet)
+		if len(batch) == client.config.BatchSize {
+			if err := flushBatch(); err != nil {
+				return err
+			}
 		}
-
-		ackRaw, err := safe_socket.RecvMessage(client.conn)
-		if err != nil {
-			logger.Error("recv-ack", logger.Fail, betArgs...)
-			return err
-		}
-
-		ackType, err := protocol.DecodeMessageType(ackRaw)
-		if err != nil || ackType != protocol.MsgAck {
-			logger.Error("recv-ack", logger.Fail, betArgs...)
-			return fmt.Errorf("unexpected response to bet: type=%d err=%v", ackType, err)
-		}
-
-		betsAmount++
 	}
 
 	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	if err := flushBatch(); err != nil {
 		return err
 	}
 
@@ -192,6 +238,7 @@ func (client *Client) Run() error {
 		logger.Success,
 		"agency-id", client.config.AgencyId,
 		"bets-amount", betsAmount,
+		"batches-amount", batchesAmount,
 		"winners-amount", len(winners),
 	)
 

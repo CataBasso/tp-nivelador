@@ -9,10 +9,11 @@ import (
 )
 
 const (
-	MsgBet     byte = 1
-	MsgDone    byte = 2
-	MsgAck     byte = 3
-	MsgWinners byte = 4
+	MsgBet        byte = 1
+	MsgDone       byte = 2
+	MsgAck        byte = 3
+	MsgWinners    byte = 4
+	MsgBatchError byte = 5
 )
 
 const coma = ","
@@ -26,8 +27,8 @@ type WinnerRecord struct {
 	Number    string
 }
 
-func EncodeBet(b bet.Bet) []byte {
-	fields := strings.Join([]string{
+func encodeBetRecord(b bet.Bet) string {
+	return strings.Join([]string{
 		strconv.Itoa(b.AgencyId),
 		b.FirstName,
 		b.LastName,
@@ -35,10 +36,18 @@ func EncodeBet(b bet.Bet) []byte {
 		b.Birthdate,
 		strconv.Itoa(b.Number),
 	}, coma)
+}
 
-	message := make([]byte, 1+len(fields))
+func EncodeBets(bets []bet.Bet) []byte {
+	records := make([]string, len(bets))
+	for i, b := range bets {
+		records[i] = encodeBetRecord(b)
+	}
+	payload := strings.Join(records, newLine)
+
+	message := make([]byte, 1+len(payload))
 	message[0] = MsgBet
-	copy(message[1:], fields)
+	copy(message[1:], payload)
 	return message
 }
 
@@ -51,6 +60,13 @@ func DecodeMessageType(raw []byte) (byte, error) {
 		return 0, fmt.Errorf("empty message")
 	}
 	return raw[0], nil
+}
+
+func DecodeBatchError(raw []byte) (string, error) {
+	if len(raw) < 1 {
+		return "", fmt.Errorf("empty message")
+	}
+	return string(raw[1:]), nil
 }
 
 func DecodeWinners(raw []byte) ([]WinnerRecord, error) {
