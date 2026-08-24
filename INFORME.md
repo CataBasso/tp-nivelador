@@ -31,3 +31,11 @@ Se definieron **tipos de mensaje explícitos**, identificados por un byte al ini
 ## Flujo de la comunicación
 
 Por cada línea del archivo de entrada, el cliente arma un mensaje `BET`, lo envía y bloquea esperando el `ACK` correspondiente antes de continuar con la siguiente línea. Al agotar el archivo, envía un mensaje `DONE` y espera la respuesta `WINNERS`, que persiste en el `OUTPUT_FILE`.
+
+## Comentarios
+
+## Descision de usar 'debug.SetGCPercent(50)'
+
+Este metodo lo que hace es configurar el garbage collector de Go y controlar el crecimiento de memoria cuando se procesan grandes volumenes de datos (apuestas en este caso) evitando que el heap crezca innecesariamente. 
+
+En mi implementacion, el cliente procesa las apuestas de forma incremental utilizando batches (ej 6), por lo que no mantiene todo el archivo en memoria. Sin embargo, durante el procesamiento se generan estructuras temporales al serializar los batches y transmitirlos por el socket. Estas estructuras, una vez utilizadas, dejan de ser necesarias y quedan disponibles para que el garbage collector las recolecte. Con la configuración por defecto del GC (que es del 100%), el heap podía crecer lo suficiente y ocacionar que test de memory falle de vez en cuando, superando el límite establecido. Por este motivo, lo configure al 50%. 
