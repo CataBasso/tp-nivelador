@@ -1,13 +1,11 @@
 import json
-import os
 
 from . import shell_cmd
 
 
 def up(docker_compose_path: str | None):
     args = ["make", "up"]
-    #env = {}
-    env = os.environ.copy()
+    env = {}
     if docker_compose_path:
         env["DOCKER_FILE_PATH"] = docker_compose_path
     shell_cmd.run(args, capture=False, env=env)
