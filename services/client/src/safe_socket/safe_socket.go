@@ -1,60 +1,56 @@
 package safe_socket
 
 import (
-    "encoding/binary"
-    "fmt"
-    "io"
+	"encoding/binary"
+	"fmt"
+	"io"
 )
 
 func SendAll(socket io.Writer, bytes []byte) error {
-    totalSent := 0
+	totalSent := 0
 
-    for totalSent < len(bytes) {
-        sent, err := socket.Write(bytes[totalSent:])
+	for totalSent < len(bytes) {
+		sent, err := socket.Write(bytes[totalSent:])
 
-        if sent > 0 {
-            totalSent += sent
-        }
+		if sent > 0 {
+			totalSent += sent
+		}
 
-        if err != nil {
-            return err
-        }
+		if err != nil {
+			return err
+		}
+	}
 
-        if sent == 0 {
-            return fmt.Errorf("socket connection closed")
-        }
-    }
-
-    return nil
+	return nil
 }
 
 func RecvAll(socket io.Reader, size int) ([]byte, error) {
-    buff := make([]byte, size)
-    totalReceived := 0
+	buff := make([]byte, size)
+	totalReceived := 0
 
-    for totalReceived < size {
-        received, err := socket.Read(buff[totalReceived:])
+	for totalReceived < size {
+		received, err := socket.Read(buff[totalReceived:])
 
-        if received > 0 {
-            totalReceived += received
-        }
+		if received > 0 {
+			totalReceived += received
+		}
 
-        if err != nil {
-            if err == io.EOF {
-                if totalReceived == size {
-                    break
-                }
-                return nil, fmt.Errorf("socket connection closed: expected=%d received=%d", size, totalReceived)
-            }
-            return nil, err
-        }
+		if err != nil {
+			if err == io.EOF {
+				if totalReceived == size {
+					break
+				}
+				return nil, fmt.Errorf("socket connection closed: expected=%d received=%d", size, totalReceived)
+			}
+			return nil, err
+		}
 
-        if received == 0 {
-            return nil, fmt.Errorf("socket connection closed: expected=%d received=%d", size, totalReceived)
-        }
-    }
+		if received == 0 {
+			return nil, fmt.Errorf("socket connection closed: expected=%d received=%d", size, totalReceived)
+		}
+	}
 
-    return buff, nil
+	return buff, nil
 }
 
 func SendMessage(socket io.Writer, message []byte) error {
@@ -66,25 +62,25 @@ func SendMessage(socket io.Writer, message []byte) error {
 }
 
 func RecvMessage(socket io.Reader) ([]byte, error) {
-    messageLengthBytes, err := RecvAll(socket, 4)
-    if err != nil {
-        return nil, err
-    }
+	messageLengthBytes, err := RecvAll(socket, 4)
+	if err != nil {
+		return nil, err
+	}
 
-    if len(messageLengthBytes) != 4 {
-        return nil, fmt.Errorf("incomplete message length")
-    }
+	if len(messageLengthBytes) != 4 {
+		return nil, fmt.Errorf("incomplete message length")
+	}
 
-    messageLength := binary.BigEndian.Uint32(messageLengthBytes)
+	messageLength := binary.BigEndian.Uint32(messageLengthBytes)
 
-    message, err := RecvAll(socket, int(messageLength))
-    if err != nil {
-        return nil, err
-    }
+	message, err := RecvAll(socket, int(messageLength))
+	if err != nil {
+		return nil, err
+	}
 
-    if len(message) != int(messageLength) {
-        return nil, fmt.Errorf("incomplete message")
-    }
+	if len(message) != int(messageLength) {
+		return nil, fmt.Errorf("incomplete message")
+	}
 
-    return message, nil
+	return message, nil
 }
