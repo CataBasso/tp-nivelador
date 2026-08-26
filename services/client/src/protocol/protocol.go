@@ -16,8 +16,10 @@ const (
 	MsgBatchError byte = 5
 )
 
-const coma = ","
-const newLine = "\n"
+const (
+	comma   = ","
+	newLine = "\n"
+)
 
 type WinnerRecord struct {
 	FirstName string
@@ -35,7 +37,7 @@ func encodeBetRecord(b bet.Bet) string {
 		strconv.Itoa(b.Document),
 		b.Birthdate,
 		strconv.Itoa(b.Number),
-	}, coma)
+	}, comma)
 }
 
 func EncodeBets(bets []bet.Bet) []byte {
@@ -82,7 +84,7 @@ func DecodeWinners(raw []byte) ([]WinnerRecord, error) {
 	records := strings.Split(payload, newLine)
 	winners := make([]WinnerRecord, 0, len(records))
 	for _, record := range records {
-		fields := strings.Split(record, coma)
+		fields := strings.Split(record, comma)
 		if len(fields) != 5 {
 			return nil, fmt.Errorf("malformed winner record: %q", record)
 		}
