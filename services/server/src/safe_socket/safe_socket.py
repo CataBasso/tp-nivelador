@@ -6,7 +6,7 @@ def recv_all(socket: socket.socket, size: int) -> bytes:
 
     while len(data) < size:
         try:
-            chunk = socket.recv(max(size - len(data), 2))
+            chunk = socket.recv(size - len(data))
         except InterruptedError:
             continue
         except OSError as e:
@@ -33,7 +33,7 @@ def send_all(socket: socket.socket, bytes_data: bytes) -> int:
             continue
         except OSError as e:
             raise ConnectionError(f"send failed: {e}") from e
-
+        
         total_sent += sent
 
     return total_sent
