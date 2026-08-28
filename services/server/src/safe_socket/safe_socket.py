@@ -1,6 +1,8 @@
 import socket
 import struct 
 
+HEADER_SIZE = 4
+
 def recv_all(socket: socket.socket, size: int) -> bytes:
     data = bytearray()
 
@@ -39,9 +41,9 @@ def send_all(socket: socket.socket, bytes_data: bytes) -> int:
     return total_sent
 
 def recv_message(socket: socket.socket):
-    message_len_bytes = recv_all(socket, 4)
+    message_len_bytes = recv_all(socket, HEADER_SIZE)
 
-    if len(message_len_bytes) != 4:
+    if len(message_len_bytes) != HEADER_SIZE:
         raise ConnectionError("Incomplete message length")
 
     message_len = struct.unpack("!I", message_len_bytes)[0]
