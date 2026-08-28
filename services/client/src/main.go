@@ -43,6 +43,7 @@ func loadConfig() (client.ClientConfig, error) {
 	if batchSizeStr == "" {
 		return client.ClientConfig{}, errors.New("BATCH_SIZE environment variable is required")
 	}
+	
 	batchSize, err := strconv.Atoi(batchSizeStr)
 	if err != nil {
 		return client.ClientConfig{}, errors.New("BATCH_SIZE environment variable must be an integer")

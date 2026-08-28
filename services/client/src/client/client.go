@@ -119,6 +119,8 @@ func parseBetLine(line string, agencyId int) (bet.Bet, error) {
 	}, nil
 }
 
+// Sends a batch of bets to the server and handles the response.
+// It returns an error if the server rejects the batch or if there is a communication error.
 func (client *Client) sendBatch(batch []bet.Bet, batchArgs []any) error {
 	if err := safe_socket.SendMessage(
 		client.conn,
@@ -160,10 +162,8 @@ func (client *Client) sendBatch(batch []bet.Bet, batchArgs []any) error {
 	}
 }
 
-func (client *Client) handleShutdown(
-	ctx context.Context,
-	shutdownDone <-chan struct{},
-) {
+// Listens for context cancellation and gracefully shuts down the client.
+func (client *Client) handleShutdown(ctx context.Context, shutdownDone <-chan struct{}) {
 	select {
 	case <-ctx.Done():
 		logger.Info("shutdown", logger.InProgress)
@@ -186,11 +186,13 @@ func (client *Client) handleShutdown(
 	}
 }
 
-func (client *Client) processBets(
-	ctx context.Context,
-	scanner *bufio.Scanner,
-	agencyId int,
-) (int, int, bool, error) {
+// Processes bets from the input file, sending them in batches to the server.
+// It returns: 
+// 		- the total number of bets processed, 
+// 		- the number of batches sent, 
+// 		- a boolean indicating if the process was interrupted by a shutdown signal, 
+// 		- an error if any occurred
+func (client *Client) processBets(ctx context.Context, scanner *bufio.Scanner, agencyId int) (int, int, bool, error) {
 	betsAmount := 0
 	batchesAmount := 0
 	batch := make([]bet.Bet, 0, client.config.BatchSize)
@@ -227,7 +229,7 @@ scanLoop:
 		default:
 		}
 
-		line := strings.TrimSpace(scanner.Text())
+		line := scanner.Text()
 		if line == "" {
 			continue
 		}

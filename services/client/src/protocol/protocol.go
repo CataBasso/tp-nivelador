@@ -29,21 +29,21 @@ type WinnerRecord struct {
 	Number    string
 }
 
-func encodeBetRecord(b bet.Bet) string {
+func encodeBetRecord(bet bet.Bet) string {
 	return strings.Join([]string{
-		strconv.Itoa(b.AgencyId),
-		b.FirstName,
-		b.LastName,
-		strconv.Itoa(b.Document),
-		b.Birthdate,
-		strconv.Itoa(b.Number),
+		strconv.Itoa(bet.AgencyId),
+		bet.FirstName,
+		bet.LastName,
+		strconv.Itoa(bet.Document),
+		bet.Birthdate,
+		strconv.Itoa(bet.Number),
 	}, comma)
 }
 
 func EncodeBets(bets []bet.Bet) []byte {
 	records := make([]string, len(bets))
-	for i, b := range bets {
-		records[i] = encodeBetRecord(b)
+	for i, bet := range bets {
+		records[i] = encodeBetRecord(bet)
 	}
 	payload := strings.Join(records, newLine)
 
@@ -64,6 +64,7 @@ func DecodeMessageType(raw []byte) (byte, error) {
 	return raw[0], nil
 }
 
+// returns the batch error message in a string mode, used to debug batch errors.
 func DecodeBatchError(raw []byte) (string, error) {
 	if len(raw) < 1 {
 		return "", fmt.Errorf("empty message")
