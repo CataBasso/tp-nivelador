@@ -16,9 +16,9 @@ class OutputFiles(TestCase):
     error_hint = "The winners list is scoped to the agency/client that loaded the record in the system"
 
     @staticmethod
-    def _guest_file_path_to_host(host_fie_directory: str, guest_file_path: str) -> str:
+    def _guest_file_path_to_host(host_file_directory: str, guest_file_path: str) -> str:
         filename = os.path.basename(guest_file_path)
-        return os.path.join(host_fie_directory, filename)
+        return os.path.join(host_file_directory, filename)
 
     @staticmethod
     def _verify_client_output(client_service):
