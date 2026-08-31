@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"bytes"
 
 	"github.com/7574-sistemas-distribuidos/tp-nivelador/src/bet"
 	"github.com/7574-sistemas-distribuidos/tp-nivelador/src/logger"
@@ -17,10 +18,12 @@ import (
 )
 
 const (
-	connectionRetryDelay    = 200 * time.Millisecond
-	connectionWaitTimeout   = 20 * time.Second
-	dialTimeout             = 2 * time.Second
+	connectionRetryDelay = 200 * time.Millisecond
+	connectionWaitTimeout = 20 * time.Second
+	dialTimeout = 2 * time.Second
 	shutdownForceCloseDelay = 3 * time.Second
+
+	newLine = '\n'
 )
 
 type ClientConfig struct {
@@ -35,6 +38,7 @@ type ClientConfig struct {
 type Client struct {
 	conn   net.Conn
 	config ClientConfig
+	sendBuf bytes.Buffer
 }
 
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
@@ -91,41 +95,47 @@ func connectToServer(ctx context.Context, host, port string) (net.Conn, error) {
 }
 
 func parseBetLine(line string, agencyId int) (bet.Bet, error) {
-	fields := strings.Split(line, ",")
-	if len(fields) != 5 {
-		return bet.Bet{}, fmt.Errorf(
-			"malformed line: expected 5 fields, got %d",
-			len(fields),
-		)
+	firstName, rest, ok := strings.Cut(line, ",")
+	if !ok {
+		return bet.Bet{}, fmt.Errorf("malformed line")
+	}
+	lastName, rest, ok := strings.Cut(rest, ",")
+	if !ok {
+		return bet.Bet{}, fmt.Errorf("malformed line")
+	}
+	documentStr, rest, ok := strings.Cut(rest, ",")
+	if !ok {
+		return bet.Bet{}, fmt.Errorf("malformed line")
+	}
+	birthdate, numberStr, ok := strings.Cut(rest, ",")
+	if !ok {
+		return bet.Bet{}, fmt.Errorf("malformed line")
 	}
 
-	document, err := strconv.Atoi(fields[2])
+	document, err := strconv.Atoi(documentStr)
 	if err != nil {
 		return bet.Bet{}, fmt.Errorf("invalid document: %w", err)
 	}
 
-	number, err := strconv.Atoi(fields[4])
+	number, err := strconv.Atoi(numberStr)
 	if err != nil {
 		return bet.Bet{}, fmt.Errorf("invalid number: %w", err)
 	}
 
 	return bet.Bet{
 		AgencyId:  agencyId,
-		FirstName: fields[0],
-		LastName:  fields[1],
+		FirstName: firstName,
+		LastName:  lastName,
 		Document:  document,
-		Birthdate: fields[3],
+		Birthdate: birthdate,
 		Number:    number,
 	}, nil
 }
 
 // Sends a batch of bets to the server and handles the response.
 // It returns an error if the server rejects the batch or if there is a communication error.
-func (client *Client) sendBatch(batch []bet.Bet, batchArgs []any) error {
-	if err := safe_socket.SendMessage(
-		client.conn,
-		protocol.EncodeBets(batch),
-	); err != nil {
+func (client *Client) sendBatch(batchArgs []any) error {
+	if err := safe_socket.SendMessage(client.conn, client.sendBuf.Bytes()); err != nil {
 		logger.Error("send-batch", logger.Fail, batchArgs...)
 		return err
 	}
@@ -144,21 +154,12 @@ func (client *Client) sendBatch(batch []bet.Bet, batchArgs []any) error {
 	switch responseType {
 	case protocol.MsgAck:
 		return nil
-
 	case protocol.MsgBatchError:
 		errMsg, _ := protocol.DecodeBatchError(responseRaw)
-		logger.Error(
-			"recv-batch-response",
-			logger.Fail,
-			append(batchArgs, "server-err", errMsg)...,
-		)
+		logger.Error("recv-batch-response", logger.Fail, append(batchArgs, "server-err", errMsg)...)
 		return fmt.Errorf("server rejected batch: %s", errMsg)
-
 	default:
-		return fmt.Errorf(
-			"unexpected response type to batch: %d",
-			responseType,
-		)
+		return fmt.Errorf("unexpected response type to batch: %d", responseType)
 	}
 }
 
@@ -186,37 +187,41 @@ func (client *Client) handleShutdown(ctx context.Context, shutdownDone <-chan st
 	}
 }
 
+func (client *Client) resetSendBuffer() {
+	client.sendBuf.Reset()
+	client.sendBuf.WriteByte(protocol.MsgBet)
+}
+
 // Processes bets from the input file, sending them in batches to the server.
 // It returns: 
 // 		- the total number of bets processed, 
 // 		- the number of batches sent, 
 // 		- a boolean indicating if the process was interrupted by a shutdown signal, 
 // 		- an error if any occurred
-func (client *Client) processBets(ctx context.Context, scanner *bufio.Scanner, agencyId int) (int, int, bool, error) {
+func (client *Client) processBets(ctx context.Context, scanner *bufio.Scanner) (int, int, bool, error) {
 	betsAmount := 0
 	batchesAmount := 0
-	batch := make([]bet.Bet, 0, client.config.BatchSize)
+	lineCount := 0
 	shuttingDown := false
 
+	client.resetSendBuffer()
+
 	flushBatch := func() error {
-		if len(batch) == 0 {
+		if lineCount == 0 {
 			return nil
 		}
-
 		batchArgs := []any{
 			"agency-id", client.config.AgencyId,
 			"batch-id", batchesAmount,
-			"batch-size", len(batch),
+			"batch-size", lineCount,
 		}
-
-		if err := client.sendBatch(batch, batchArgs); err != nil {
+		if err := client.sendBatch(batchArgs); err != nil {
 			return err
 		}
-
-		betsAmount += len(batch)
+		betsAmount += lineCount
 		batchesAmount++
-		batch = batch[:0]
-
+		lineCount = 0
+		client.resetSendBuffer()
 		return nil
 	}
 
@@ -229,25 +234,23 @@ scanLoop:
 		default:
 		}
 
-		line := scanner.Text()
-		if line == "" {
+		line := scanner.Bytes()
+		if len(line) == 0 {
 			continue
 		}
 
-		parsedBet, err := parseBetLine(line, agencyId)
-		if err != nil {
-			logger.Error(
-				"parse-bet",
-				logger.Fail,
+		if lineCount > 0 {
+			client.sendBuf.WriteByte(newLine)
+		}
+		if err := protocol.EncodeBet(&client.sendBuf, client.config.AgencyId, line); err != nil {
+			logger.Error("parse-bet", logger.Fail,
 				"agency-id", client.config.AgencyId,
-				"bet-id", betsAmount+len(batch),
-			)
+				"bet-id", betsAmount+lineCount)
 			return 0, 0, false, err
 		}
+		lineCount++
 
-		batch = append(batch, parsedBet)
-
-		if len(batch) == client.config.BatchSize {
+		if lineCount == client.config.BatchSize {
 			if err := flushBatch(); err != nil {
 				return 0, 0, false, err
 			}
@@ -257,24 +260,14 @@ scanLoop:
 	if err := scanner.Err(); err != nil {
 		return 0, 0, false, err
 	}
-
 	if shuttingDown {
 		return betsAmount, batchesAmount, true, nil
 	}
-
 	if err := flushBatch(); err != nil {
 		return 0, 0, false, err
 	}
-
-	if err := safe_socket.SendMessage(
-		client.conn,
-		protocol.EncodeDone(),
-	); err != nil {
-		logger.Error(
-			"send-done",
-			logger.Fail,
-			"agency-id", client.config.AgencyId,
-		)
+	if err := safe_socket.SendMessage(client.conn, protocol.EncodeDone()); err != nil {
+		logger.Error("send-done", logger.Fail, "agency-id", client.config.AgencyId)
 		return 0, 0, false, err
 	}
 
@@ -284,8 +277,7 @@ scanLoop:
 func (client *Client) Run(ctx context.Context) error {
 	defer client.conn.Close()
 
-	agencyId, err := strconv.Atoi(client.config.AgencyId)
-	if err != nil {
+	if _, err := strconv.Atoi(client.config.AgencyId); err != nil {
 		return fmt.Errorf("invalid AGENCY_ID %q: %w", client.config.AgencyId, err)
 	}
 
@@ -320,7 +312,7 @@ func (client *Client) Run(ctx context.Context) error {
 	go client.handleShutdown(ctx, shutdownDone)
 
 	betsAmount, batchesAmount, shuttingDown, err :=
-		client.processBets(ctx, scanner, agencyId)
+		client.processBets(ctx, scanner)
 
 	if err != nil {
 		return err
@@ -340,34 +332,13 @@ func (client *Client) Run(ctx context.Context) error {
 
 	winnersRaw, err := safe_socket.RecvMessage(client.conn)
 	if err != nil {
-		logger.Error(
-			"recv-winners",
-			logger.Fail,
-			"agency-id", client.config.AgencyId,
-		)
+		logger.Error("recv-winners", logger.Fail, "agency-id", client.config.AgencyId)
 		return err
 	}
 
-	winners, err := protocol.DecodeWinners(winnersRaw)
+	winnersAmount, err := protocol.DecodeWinners(writer, winnersRaw)
 	if err != nil {
 		return err
-	}
-
-	for _, w := range winners {
-		row := strings.Join(
-			[]string{
-				w.FirstName,
-				w.LastName,
-				w.Document,
-				w.Birthdate,
-				w.Number,
-			},
-			",",
-		)
-
-		if _, err := fmt.Fprintf(writer, "%s\n", row); err != nil {
-			return err
-		}
 	}
 
 	logger.Info(
@@ -376,7 +347,7 @@ func (client *Client) Run(ctx context.Context) error {
 		"agency-id", client.config.AgencyId,
 		"bets-amount", betsAmount,
 		"batches-amount", batchesAmount,
-		"winners-amount", len(winners),
+		"winners-amount", winnersAmount,
 	)
 
 	return nil

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"os/signal"
-	"runtime/debug"
 	"strconv"
 	"syscall"
 
@@ -60,7 +59,6 @@ func loadConfig() (client.ClientConfig, error) {
 }
 
 func run() int {
-	debug.SetGCPercent(50)
 	config, err := loadConfig()
 	if err != nil {
 		logger.Error("load-config", logger.Fail, "err", err)

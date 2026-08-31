@@ -1,11 +1,9 @@
 package protocol
 
 import (
+	"bytes"
 	"fmt"
-	"strconv"
-	"strings"
-
-	"github.com/7574-sistemas-distribuidos/tp-nivelador/src/bet"
+	"bufio"
 )
 
 const (
@@ -17,7 +15,7 @@ const (
 )
 
 const (
-	comma   = ","
+	comma = ","
 	newLine = "\n"
 )
 
@@ -29,28 +27,57 @@ type WinnerRecord struct {
 	Number    string
 }
 
-func encodeBetRecord(bet bet.Bet) string {
-	return strings.Join([]string{
-		strconv.Itoa(bet.AgencyId),
-		bet.FirstName,
-		bet.LastName,
-		strconv.Itoa(bet.Document),
-		bet.Birthdate,
-		strconv.Itoa(bet.Number),
-	}, comma)
+func isDigit(b []byte) bool {
+	if len(b) == 0 {
+		return false
+	}
+
+	for _, c := range b {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
-func EncodeBets(bets []bet.Bet) []byte {
-	records := make([]string, len(bets))
-	for i, bet := range bets {
-		records[i] = encodeBetRecord(bet)
+func EncodeBet(buf *bytes.Buffer, agencyId string, line []byte) error {
+	first := bytes.IndexByte(line, comma[0])
+	if first == -1 {
+		return fmt.Errorf("malformed line: expected 5 fields")
 	}
-	payload := strings.Join(records, newLine)
+	second := bytes.IndexByte(line[first+1:], comma[0])
+	if second == -1 {
+		return fmt.Errorf("malformed line: expected 5 fields")
+	}
+	second += first + 1
+	third := bytes.IndexByte(line[second+1:], comma[0])
+	if third == -1 {
+		return fmt.Errorf("malformed line: expected 5 fields")
+	}
+	third += second + 1
+	fourth := bytes.IndexByte(line[third+1:], comma[0])
+	if fourth == -1 {
+		return fmt.Errorf("malformed line: expected 5 fields")
+	}
+	fourth += third + 1
 
-	message := make([]byte, 1+len(payload))
-	message[0] = MsgBet
-	copy(message[1:], payload)
-	return message
+	document := line[second+1 : third]
+	number := line[fourth+1:]
+
+	if bytes.IndexByte(number, ',') != -1 {
+		return fmt.Errorf("malformed line: expected 5 fields")
+	}
+	if !isDigit(document) {
+		return fmt.Errorf("invalid document: %q", document)
+	}
+	if !isDigit(number) {
+		return fmt.Errorf("invalid number: %q", number)
+	}
+
+	buf.WriteString(agencyId)
+	buf.WriteByte(',')
+	buf.Write(line)
+	return nil
 }
 
 func EncodeDone() []byte {
@@ -69,33 +96,51 @@ func DecodeBatchError(raw []byte) (string, error) {
 	if len(raw) < 1 {
 		return "", fmt.Errorf("empty message")
 	}
+
+	if raw[0] != MsgBatchError {
+    	return "", fmt.Errorf("unexpected message type: %d", raw[0])
+	}
+
 	return string(raw[1:]), nil
 }
 
-func DecodeWinners(raw []byte) ([]WinnerRecord, error) {
+// writes each winner record directly to the output writer. 
+// It returns the number of winners written and an error if any.
+func DecodeWinners(winners *bufio.Writer, raw []byte) (int, error) {
 	if len(raw) < 1 {
-		return nil, fmt.Errorf("empty message")
+		return 0, fmt.Errorf("empty message")
 	}
 
-	payload := string(raw[1:])
-	if payload == "" {
-		return []WinnerRecord{}, nil
+	if raw[0] != MsgWinners {
+    	return 0, fmt.Errorf("unexpected message type: %d", raw[0])
 	}
 
-	records := strings.Split(payload, newLine)
-	winners := make([]WinnerRecord, 0, len(records))
-	for _, record := range records {
-		fields := strings.Split(record, comma)
-		if len(fields) != 5 {
-			return nil, fmt.Errorf("malformed winner record: %q", record)
+	payload := raw[1:]
+
+	count := 0
+	for len(payload) > 0 {
+		line := []byte{}
+		idx := bytes.IndexByte(payload, newLine[0])
+		if idx == -1 {
+			line = payload
+			payload = nil
+		} else {
+			line = payload[:idx]
+			payload = payload[idx+1:]
 		}
-		winners = append(winners, WinnerRecord{
-			FirstName: fields[0],
-			LastName:  fields[1],
-			Document:  fields[2],
-			Birthdate: fields[3],
-			Number:    fields[4],
-		})
+
+		if bytes.Count(line, []byte(comma)) != 4 {
+			return count, fmt.Errorf("malformed winner record: %q", line)
+		}
+
+		if _, err := winners.Write(line); err != nil {
+			return count, err
+		}
+		if err := winners.WriteByte(newLine[0]); err != nil {
+			return count, err
+		}
+		count++
 	}
-	return winners, nil
+
+	return count, nil
 }

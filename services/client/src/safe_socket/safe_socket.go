@@ -56,11 +56,13 @@ func RecvAll(socket io.Reader, size int) ([]byte, error) {
 }
 
 func SendMessage(socket io.Writer, message []byte) error {
-	packet := make([]byte, headerSize+len(message))
-	binary.BigEndian.PutUint32(packet[:headerSize], uint32(len(message)))
-	copy(packet[headerSize:], message)
+	header := [headerSize]byte{}
+	binary.BigEndian.PutUint32(header[:], uint32(len(message)))
 
-	return SendAll(socket, packet)
+	if err := SendAll(socket, header[:]); err != nil {
+		return err
+	}
+	return SendAll(socket, message)
 }
 
 func RecvMessage(socket io.Reader) ([]byte, error) {
