@@ -29,70 +29,37 @@ class ClientHandler:
         bets_amount = 0
         agency_id = None
 
-        logger.info(
-            action,
-            logger.LogResult.in_progress,
-        )
+        logger.info(action, logger.LogResult.in_progress)
 
         while True:
             try:
-                message = safe_socket.recv_message(
-                    self.client_socket
-                )
+                message = safe_socket.recv_message(self.client_socket)
 
             except EOFError:
-                logger.info(
-                    action,
-                    logger.LogResult.success,
-                    "bets-amount",
-                    bets_amount,
-                )
+                logger.info(action, logger.LogResult.success, "bets-amount", bets_amount)
                 return
 
             except Exception:
-                logger.error(
-                    action,
-                    logger.LogResult.fail,
-                    "bets-amount",
-                    bets_amount,
-                )
+                logger.error(action, logger.LogResult.fail, "bets-amount", bets_amount)
                 raise
 
             msg_type = protocol.decode_message_type(message)
 
             if msg_type == protocol.MSG_BET:
-                batch_agency_id, batch_count = (
-                    self.handle_bet_batch(message)
-                )
+                batch_agency_id, batch_count = (self.handle_bet_batch(message))
 
                 agency_id = batch_agency_id
                 bets_amount += batch_count
 
             elif msg_type == protocol.MSG_DONE:
-                logger.info(
-                    action,
-                    logger.LogResult.success,
-                    "agency-id",
-                    agency_id,
-                    "bets-amount",
-                    bets_amount,
-                )
-
+                logger.info(action, logger.LogResult.success, "agency-id", agency_id, "bets-amount", bets_amount)
                 self.await_quorum(agency_id)
-
                 winners = self.winners_for_agency(agency_id)
-
-                safe_socket.send_message(
-                    self.client_socket,
-                    protocol.encode_winners(winners),
-                )
-
+                safe_socket.send_message(self.client_socket, protocol.encode_winners(winners))
                 return
 
             else:
-                raise ValueError(
-                    f"unexpected message type: {msg_type}"
-                )
+                raise ValueError(f"unexpected message type: {msg_type}")
 
     def handle_bet_batch(self, raw_message):
         try:
@@ -114,25 +81,13 @@ class ClientHandler:
                 self.lottery.store_bets(bets)
 
         except Exception as e:
-            logger.error(
-                "handle-batch",
-                logger.LogResult.fail,
-                "err",
-                str(e),
-            )
+            logger.error("handle-batch", logger.LogResult.fail, "err", str(e))
 
-            safe_socket.send_message(
-                self.client_socket,
-                protocol.encode_batch_error(str(e)),
-            )
+            safe_socket.send_message(self.client_socket, protocol.encode_batch_error(str(e)))
 
             raise
 
-        safe_socket.send_message(
-            self.client_socket,
-            protocol.encode_ack(),
-        )
-
+        safe_socket.send_message(self.client_socket, protocol.encode_ack())
         return bets[0].agency_id, len(bets)
 
     def winners_for_agency(self, agency_id):

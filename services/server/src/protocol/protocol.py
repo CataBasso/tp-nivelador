@@ -15,12 +15,8 @@ def decode_message_type(raw: bytes) -> int:
     return raw[0]
 
 def _decode_bet_record(record: str) -> Bet:
-    agency_id, first_name, last_name, document, birthdate, number = record.split(
-        COMMA
-    )
-    return Bet(
-        int(agency_id), first_name, last_name, int(document), birthdate, int(number)
-    )
+    agency_id, first_name, last_name, document, birthdate, number = record.split(COMMA)
+    return Bet(int(agency_id), first_name, last_name, int(document), birthdate, int(number))
 
 def decode_bets(raw: bytes) -> list[Bet]:
     if len(raw) < 1:
@@ -33,9 +29,7 @@ def decode_bets(raw: bytes) -> list[Bet]:
     return [_decode_bet_record(record) for record in payload.split(NEW_LINE)]
 
 def encode_bet(agency_id, first_name, last_name, document, birthdate, number) -> bytes:
-    fields = COMMA.join(
-        [str(agency_id), first_name, last_name, str(document), birthdate, str(number)]
-    )
+    fields = COMMA.join([str(agency_id), first_name, last_name, str(document), birthdate, str(number)])
     return bytes([MSG_BET]) + fields.encode("utf-8")
 
 def encode_done() -> bytes:
@@ -49,9 +43,7 @@ def encode_batch_error(message: str) -> bytes:
 
 def encode_winners(bets) -> bytes:
     records = [
-        COMMA.join(
-            [bet.first_name, bet.last_name, str(bet.document), bet.birthdate, str(bet.number)]
-        )
+        COMMA.join([bet.first_name, bet.last_name, str(bet.document), bet.birthdate, str(bet.number)])
         for bet in bets
     ]
     payload = NEW_LINE.join(records)

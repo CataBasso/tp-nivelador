@@ -3,9 +3,7 @@ import time
 
 import logger
 
-
 SHUTDOWN_GRACE_PERIOD_SECONDS = 5.0
-
 
 class ShutdownRequested(Exception):
     """El servidor está apagándose."""
@@ -38,19 +36,13 @@ def force_close_remaining_clients(server):
 
 
 def join_threads_with_bounded_timeout(server):
-    deadline = (
-        time.monotonic()
-        + SHUTDOWN_GRACE_PERIOD_SECONDS
-    )
+    deadline = (time.monotonic() + SHUTDOWN_GRACE_PERIOD_SECONDS)
 
     with server.threads_lock:
         threads_snapshot = list(server.threads)
 
     for thread in threads_snapshot:
-        remaining = max(
-            0.0,
-            deadline - time.monotonic(),
-        )
+        remaining = max(0.0, deadline - time.monotonic())
         thread.join(timeout=remaining)
 
     still_alive = [
@@ -60,13 +52,8 @@ def join_threads_with_bounded_timeout(server):
     ]
 
     if still_alive:
-        logger.error(
-            "shutdown",
-            logger.LogResult.fail,
-            "still-alive-threads",
-            len(still_alive),
-        )
-
+        logger.error("shutdown", logger.LogResult.fail, "still-alive-threads", len(still_alive))
+        
         force_close_remaining_clients(server)
 
         for thread in still_alive:

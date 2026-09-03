@@ -60,7 +60,7 @@ Para garantizar que el sorteo se realice únicamente cuando haya finalizado la r
 
 ## Graceful Shutdown 
 
-Tanto el cliente como el servidor gestionan la señal `SIGTERM` para liberar recursos de forma limpia tal como pide el ejercicio 8: 
+Tanto el cliente como el servidor gestionan la señal `SIGTERM` para liberar recursos de forma limpia: 
 
 - **Servidor:** Al recibir `SIGTERM`, activa una bandera de cierre, cierra el socket de escucha y notifica a la variable de condición del quórum para despertar a los hilos en espera. Luego, otorga un tiempo límite para esperar la finalización de los hilos, forzando el cierre de sockets activos sólo si algún hilo no responde a tiempo. 
 - **Cliente:** Utiliza el context de Go para interrumpir el procesamiento del archivo al recibir la señal, cerrando los archivos y sockets abiertos sin enviar mensajes inconsistentes al servidor. 

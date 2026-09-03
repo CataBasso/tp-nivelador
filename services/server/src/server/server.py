@@ -27,13 +27,10 @@ class Server:
 
         self.shutdown_event = threading.Event()
         self.server_socket = None
-
         self.threads = []
         self.threads_lock = threading.Lock()
-
         self.client_sockets = set()
         self.client_sockets_lock = threading.Lock()
-
         self.storage_lock = threading.Lock()
         self.quorum_condition = threading.Condition()
         self.finished_agencies = set()
@@ -56,50 +53,28 @@ class Server:
                 handler.handle()
 
         except ShutdownRequested:
-            logger.info(
-                "handle-client",
-                logger.LogResult.success,
-                "reason",
-                "shutdown",
-            )
+            logger.info("handle-client", logger.LogResult.success, "reason", "shutdown")
         except Exception:
-            logger.error(
-                "handle-client",
-                logger.LogResult.fail,
-            )
+            logger.error("handle-client", logger.LogResult.fail)
         finally:
             with self.client_sockets_lock:
                 self.client_sockets.discard(client_socket)
 
     def run(self):
-        signal.signal(
-            signal.SIGTERM,
-            lambda signum, frame: handle_sigterm(self),
-        )
+        signal.signal(signal.SIGTERM, lambda signum, frame: handle_sigterm(self))
 
-        with socket.socket(
-            socket.AF_INET,
-            socket.SOCK_STREAM,
-        ) as server_socket:
-            server_socket.bind(
-                (self.server_host, self.server_port)
-            )
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+            server_socket.bind((self.server_host, self.server_port))
             server_socket.listen()
             self.server_socket = server_socket
 
             while not self.shutdown_event.is_set():
                 try:
-                    logger.info(
-                        "accept-connection",
-                        logger.LogResult.in_progress,
-                    )
+                    logger.info("accept-connection", logger.LogResult.in_progress)
 
                     client_socket, _ = server_socket.accept()
 
-                    logger.info(
-                        "accept-connection",
-                        logger.LogResult.success,
-                    )
+                    logger.info("accept-connection", logger.LogResult.success)
 
                 except OSError:
                     break
@@ -119,7 +94,4 @@ class Server:
 
         join_threads_with_bounded_timeout(self)
 
-        logger.info(
-            "shutdown",
-            logger.LogResult.success,
-        )
+        logger.info("shutdown", logger.LogResult.success)

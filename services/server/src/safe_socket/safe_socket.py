@@ -17,9 +17,7 @@ def recv_all(socket: socket.socket, size: int) -> bytes:
         if not chunk:
             if len(data) == 0:
                 raise EOFError("socket closed by peer")
-            raise ConnectionError(
-                f"socket connection closed: expected={size} received={len(data)}"
-            )
+            raise ConnectionError(f"socket connection closed: expected={size} received={len(data)}")
 
         data.extend(chunk)
 
