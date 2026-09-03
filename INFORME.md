@@ -7,27 +7,60 @@ La comunicación entre cliente y servidor se realiza sobre un socket TCP mediant
 - La longitud del mensaje en bytes en formato big-endian
 - El contenido del mensaje efectivamente
 
-De esta manera, el socket cuando recibe un mensaje puede saber cuantos bytes tiene que leer para recibir el mensaje completo. Y asi, asegurar la integridad del mismo. 
+De esta manera, el socket cuando recibe un mensaje puede saber cuantos bytes tiene que leer para recibir el mensaje completo. Y asi, asegurar la integridad del mismo.
 
 ## Manejo de short read / short write
 
-Para evitar mensajes truncados o corruptos, se implementaron dos funciones de bajo nivel que garantizan la transferencia completa:
+Para evitar mensajes truncados o corruptos, se implementaron dos funciones que garantizan la transferencia completa:
 
-- **`send_all` / `SendAll`**: envía el buffer completo, reintentando en un loop mientras queden bytes pendientes, hasta que se hayan escrito todos o se detecte un error (conexión cerrada, error de socket).
-- **`recv_all` / `RecvAll`**: recibe exactamente `size` bytes, acumulando en un loop los fragmentos recibidos en sucesivas llamadas, hasta completar el tamaño esperado o detectar el cierre de la conexión (`EOF`) antes de tiempo.
+- **`send_all` / `SendAll`**: Envía un buffer reintentando iterativamente mientras queden bytes pendientes hasta completar la transferencia o detectar un error (conexión cerrada, error de socket).
+- **`recv_all` / `RecvAll`**: Recibe exactamente la cantidad de bytes requerida, acumulando lecturas sucesivas del socket hasta completar el tamaño exacto esperado o detectar el cierre de la conexión (EOF) antes de tiempo.
 
-Sobre estas dos primitivas se construyen `send_message`/`SendMessage` y `recv_message`/`RecvMessage`, que arman y desarman el framing de longitud + payload descripto arriba.
+Sobre estas primitivas se construyen `send_message`/`SendMessage` y `recv_message`/`RecvMessage`, encargadas de armar y desarmar el encabezado de 4 bytes antes de operar con el payload.
 
 ## Tipos de mensajes
 
-Se definieron **tipos de mensaje explícitos**, identificados por un byte al inicio del payload. Esta parte, esta implementada en un modulo separado (`protocol`). Este modulo solo sabe transformar datos crudos en bytes y viceversa; no abre sockets ni conoce la lógica de sorteo.
+El protocolo define tipos de mensaje explícitos que se envian en el primer byte del payload. Toda la lógica de serialización y deserialización se encuentra aislada en el módulo `protocol`:
 
-- `1` (BET): El **cliente** envía una apuesta individual al **servidor** (`agency_id,first_name,last_name,document,birthdate,number`).
-- `2` (DONE): El **cliente** indica que la agencia terminó de enviar apuestas y le solicita el resultado del sorteo al **servidor**. 
-- `3` (ACK): El **servidor** le confirma que una apuesta fue almacenada al **cliente**.
-- `4` (WINNERS): El **servidor** devuelve el listado de ganadores de la agencia al **cliente** (uno o más registros separados por salto de línea, cada uno `first_name,last_name,document,birthdate,number`).
-- `5` (BATCH_ERROR): El **servidor** le envia al **cliente** un mensaje de error en texto plano. 
+- `1` (BET): Envío de apuestas desde el **cliente** al **servidor**. Contiene uno o más registros separados por salto de línea (`\n`), codificados como `agency_id,first_name,last_name,document,birthdate,number`.
+- `2` (DONE): El **cliente** notifica al **servidor** que finalizó el envío de apuestas para esa agencia solicitando el resultado del sorteo.
+- `3` (ACK): El **servidor** le confirma al **cliente** la recepción y almacenamiento correcto de un lote de apuestas.
+- `4` (WINNERS): El **servidor** retorna el listado de ganadores pertenecientes a la agencia manteniendo el mismo formato en el cual recibio las mismas (`first_name,last_name,document,birthdate,number` separados por `\n`).
+- `5` (BATCH_ERROR): El **servidor** reporta un fallo de validación o procesamiento en el lote enviado.
 
 ## Flujo de la comunicación
 
-Por cada línea del archivo de entrada, el cliente arma un mensaje `BET`, lo envía y bloquea esperando el `ACK` correspondiente antes de continuar con la siguiente línea. Al agotar el archivo, envía un mensaje `DONE` y espera la respuesta `WINNERS`, que persiste en el `OUTPUT_FILE`.
+1. **Envío en lotes:** El cliente procesa el archivo de entrada e incrementa un buffer interno hasta acumular la cantidad de apuestas configurada en `BATCH_SIZE` y luego envía el paquete `BET` con las $N$ apuestas. 
+2. **Confirmación:** Espera de manera bloqueante el mensaje `ACK` o `BATCH_ERROR` proveniente del servidor antes de continuar procesando el archivo.
+3. **Repetición:** Esto se repite hasta que el cliente haya procesado y enviado todas las apuestas en el INPUT_FILE. 
+4. **Cierre y Sorteo:** Una vez procesado todo el archivo, el cliente envía `DONE` y se bloquea esperando la llegada del paquete `WINNERS` para esa agencia, el cual escribe en el archivo `OUTPUT_FILE`.
+
+# Concurrencia y Sincronización
+
+El servidor implementa un modelo en el cual existirá un hilo por cada cliente que se conecte al servidor y así poder atender a más de uno a la vez. El hilo principal se encarga de quedarse esperando por conexiones, aceptarlas y crearles su hilo correspondiente.
+
+## Mecanismos de Sincronización
+
+### **Locks** 
+Se utilizan 3 locks independientes:
+
+1. `threads_lock`: Se utiliza cuando el hilo principal crea e inserta un thread en la lista de hilos activos, y cuando el proceso de apagado requiere iterar sobre ellos para joinearlos. Es necesario porque como las listas de Python no son *thread-safe*; si el apagado lee la lista mientras el hilo principal agrega una nueva conexión, se generaría un error de modificación concurrente.
+
+2. `storage_lock`: Se utiliza para *escribir* las apuestas recibidas, *leerlas* y *calcular* los ganadores. Es necesario porque, por ejemplo, si dos agencias envían un lote al mismo tiempo, sin este lock ambos hilos escribirían el archivo simultáneamente, entrelazando las filas y corrompiendolo. Es decir, evita race conditions. 
+
+3. `client_sockets_lock`: Se usa cuando se conecta o desconecta un cliente para actualizar el conjunto de sockets activos. Sirve para que cuando se quiere apagar un hilo, el servidor pueda obtener una captura limpia de los sockets abiertos para forzar su cierre sin interferir con conexiones en curso.
+
+### **Quórum** 
+   
+Para garantizar que el sorteo se realice únicamente cuando haya finalizado la recepción de un número mínimo de agencias, se utiliza una condvar:
+
+- Cuando una agencia envía el mensaje `DONE`, agrega su `agency_id` al conjunto protegido `finished_agencies`.
+- Si la cantidad de agencias finalizadas alcanza el mínimo, el hilo despierta a todos los hilos en espera.
+- Si no se alcanza la cuota, el hilo ingresa en espera.
+
+## Graceful Shutdown 
+
+Tanto el cliente como el servidor gestionan la señal `SIGTERM` para liberar recursos de forma limpia tal como pide el ejercicio 8: 
+
+- **Servidor:** Al recibir `SIGTERM`, activa una bandera de cierre, cierra el socket de escucha y notifica a la variable de condición del quórum para despertar a los hilos en espera. Luego, otorga un tiempo límite para esperar la finalización de los hilos, forzando el cierre de sockets activos sólo si algún hilo no responde a tiempo. 
+- **Cliente:** Utiliza el context de Go para interrumpir el procesamiento del archivo al recibir la señal, cerrando los archivos y sockets abiertos sin enviar mensajes inconsistentes al servidor. 
