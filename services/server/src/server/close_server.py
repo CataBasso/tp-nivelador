@@ -33,6 +33,11 @@ def force_close_remaining_clients(server):
             client_socket.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
+        finally:
+            try:
+                client_socket.close()
+            except OSError:
+                pass
 
 
 def join_threads_with_bounded_timeout(server):
