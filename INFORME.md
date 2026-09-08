@@ -1,6 +1,8 @@
-# Protocolo de comunicación
+# Infome TP-Nivelador 2C2026 - Catalina Basso - 108564
 
-## Formato de mensajes
+## Protocolo de comunicación
+
+### Formato de mensajes
 
 La comunicación entre cliente y servidor se realiza sobre un socket TCP mediante un protocolo donde cada mensaje se compone de dos partes concatenadas en un único buffer:
 
@@ -9,7 +11,7 @@ La comunicación entre cliente y servidor se realiza sobre un socket TCP mediant
 
 De esta manera, el socket cuando recibe un mensaje puede saber cuantos bytes tiene que leer para recibir el mensaje completo. Y asi, asegurar la integridad del mismo.
 
-## Manejo de short read / short write
+### Manejo de short read / short write
 
 Para evitar mensajes truncados o corruptos, se implementaron dos funciones que garantizan la transferencia completa:
 
@@ -18,7 +20,7 @@ Para evitar mensajes truncados o corruptos, se implementaron dos funciones que g
 
 Sobre estas primitivas se construyen `send_message`/`SendMessage` y `recv_message`/`RecvMessage`, encargadas de armar y desarmar el encabezado de 4 bytes antes de operar con el payload.
 
-## Tipos de mensajes
+### Tipos de mensajes
 
 El protocolo define tipos de mensaje explícitos que se envian en el primer byte del payload. Toda la lógica de serialización y deserialización se encuentra aislada en el módulo `protocol`:
 
@@ -28,20 +30,20 @@ El protocolo define tipos de mensaje explícitos que se envian en el primer byte
 - `4` (WINNERS): El **servidor** retorna el listado de ganadores pertenecientes a la agencia manteniendo el mismo formato en el cual recibio las mismas (`first_name,last_name,document,birthdate,number` separados por `\n`).
 - `5` (BATCH_ERROR): El **servidor** reporta un fallo de validación o procesamiento en el lote enviado.
 
-## Flujo de la comunicación
+### Flujo de la comunicación
 
 1. **Envío en lotes:** El cliente procesa el archivo de entrada e incrementa un buffer interno hasta acumular la cantidad de apuestas configurada en `BATCH_SIZE` y luego envía el paquete `BET` con las $N$ apuestas. 
 2. **Confirmación:** Espera de manera bloqueante el mensaje `ACK` o `BATCH_ERROR` proveniente del servidor antes de continuar procesando el archivo.
 3. **Repetición:** Esto se repite hasta que el cliente haya procesado y enviado todas las apuestas en el INPUT_FILE. 
 4. **Cierre y Sorteo:** Una vez procesado todo el archivo, el cliente envía `DONE` y se bloquea esperando la llegada del paquete `WINNERS` para esa agencia, el cual escribe en el archivo `OUTPUT_FILE`.
 
-# Concurrencia y Sincronización
+## Concurrencia y Sincronización
 
 El servidor implementa un modelo en el cual existirá un hilo por cada cliente que se conecte al servidor y así poder atender a más de uno a la vez. El hilo principal se encarga de quedarse esperando por conexiones, aceptarlas y crearles su hilo correspondiente.
 
-## Mecanismos de Sincronización
+### Mecanismos de Sincronización
 
-### **Locks** 
+#### **Locks** 
 Se utilizan 3 locks independientes:
 
 1. `threads_lock`: Se utiliza cuando el hilo principal crea e inserta un thread en la lista de hilos activos, y cuando el proceso de apagado requiere iterar sobre ellos para joinearlos. Es necesario porque como las listas de Python no son *thread-safe*; si el apagado lee la lista mientras el hilo principal agrega una nueva conexión, se generaría un error de modificación concurrente.
@@ -50,7 +52,7 @@ Se utilizan 3 locks independientes:
 
 3. `client_sockets_lock`: Se usa cuando se conecta o desconecta un cliente para actualizar el conjunto de sockets activos. Sirve para que cuando se quiere apagar un hilo, el servidor pueda obtener una captura limpia de los sockets abiertos para forzar su cierre sin interferir con conexiones en curso.
 
-### **Quórum** 
+#### **Quórum** 
    
 Para garantizar que el sorteo se realice únicamente cuando haya finalizado la recepción de un número mínimo de agencias, se utiliza una condvar:
 
@@ -58,9 +60,10 @@ Para garantizar que el sorteo se realice únicamente cuando haya finalizado la r
 - Si la cantidad de agencias finalizadas alcanza el mínimo, el hilo despierta a todos los hilos en espera.
 - Si no se alcanza la cuota, el hilo ingresa en espera.
 
-## Graceful Shutdown 
+### Graceful Shutdown 
 
 Tanto el cliente como el servidor gestionan la señal `SIGTERM` para liberar recursos de forma limpia: 
 
-- **Servidor:** Al recibir `SIGTERM`, activa una bandera de cierre, cierra el socket de escucha y notifica a la variable de condición del quórum para despertar a los hilos en espera. Luego, otorga un tiempo límite para esperar la finalización de los hilos, forzando el cierre de sockets activos sólo si algún hilo no responde a tiempo. 
-- **Cliente:** Utiliza el context de Go para interrumpir el procesamiento del archivo al recibir la señal, cerrando los archivos y sockets abiertos sin enviar mensajes inconsistentes al servidor. 
+- **Servidor:** Al recibir `SIGTERM`, activa una bandera de cierre, cierra el socket de escucha y notifica a la variable de condición del quórum para despertar a los hilos que se encuentren esperando. Luego, espera durante un tiempo límite a que los hilos finalicen. Si alguno continúa activo, fuerza el cierre de los sockets de los clientes restantes para desbloquear las operaciones pendientes.
+- **Cliente:** Utiliza el context de Go para detectar la recepción de SIGTERM e interrumpir el procesamiento del archivo. Los archivos y la conexión se cierran mediante defer, mientras que, si la comunicación queda bloqueada durante el cierre, se fuerza el cierre de la conexión después de un tiempo límite.
+
